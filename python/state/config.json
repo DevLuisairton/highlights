@@ -1,0 +1,20 @@
+{
+  "_comment": "Pesos da pontuação de highlights. Editável a quente — o worker lê a cada job. Remova chaves pra usar o default embutido em python/config.py.",
+  "weights": {
+    "kill": 1.0,
+    "headshot": 0.5,
+    "wallbang": 1.5,
+    "noscope": 2.0,
+    "knife": 3.0,
+    "smoke": 1.0,
+    "blind": 1.0,
+    "airborne": 1.5,
+    "long_range": 1.0,
+    "fast_kill": 0.75,
+    "round_win_kill": 1.0
+  },
+  "multikill": { "2": 1.0, "3": 3.0, "4": 6.0, "5": 12.0 },
+  "clutch_per_enemy": 3.0,
+  "long_range_units": 1900.0,
+  "fast_kill_seconds": 1.2
+}

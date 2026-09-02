@@ -1,0 +1,18 @@
+# O Caddy é a única porta de entrada em produção (portas 80/443). Faz TLS
+# automático e repassa pro serviço `web` na rede interna do compose.
+#
+# SITE_ADDRESS vem do ambiente (docker-compose.yml). Domínio real => cert
+# Let's Encrypt; "localhost" => CA interna do Caddy (navegador avisa).
+{$SITE_ADDRESS} {
+	encode gzip
+
+	# Uploads de .dem passam de 100 MB.
+	request_body {
+		max_size 600MB
+	}
+
+	reverse_proxy web:3000 {
+		# SSE do progresso do job precisa de flush imediato.
+		flush_interval -1
+	}
+}

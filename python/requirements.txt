@@ -1,0 +1,4 @@
+# Parsing de demos de CS2 (Source 2). Core em Rust, traz pandas como dep.
+demoparser2>=0.30,<1.0
+# Carrega o .env da raiz quando o CLI roda fora do Next (testes, uso manual).
+python-dotenv>=1.0,<2.0

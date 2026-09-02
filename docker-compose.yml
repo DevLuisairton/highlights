@@ -1,0 +1,37 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Em Docker a gravação no CS2 não é possível (sem desktop/GPU).
+      RECORDER_ENABLED: "0"
+    expose:
+      - "3000"
+    volumes:
+      # Jobs (uploads .dem, events.json, highlights.json, partida.vdm).
+      # Persiste entre redeploys.
+      - hillights-jobs:/app/python/state/jobs
+
+  # Proxy reverso com HTTPS automático (Let's Encrypt). Requer SITE_ADDRESS
+  # no .env (domínio real, ou "localhost" pra teste com CA interna).
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: "${SITE_ADDRESS:?defina SITE_ADDRESS no .env — ex. hillights.seudominio.com (ou localhost)}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  hillights-jobs:
+  caddy-data:
+  caddy-config:

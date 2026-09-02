@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.github
+python/.venv
+python/**/__pycache__
+python/state/jobs/*
+!python/state/jobs/.gitkeep
+.pytest_cache
+*.md
+.env
+.env*.local
+npm-debug.log*

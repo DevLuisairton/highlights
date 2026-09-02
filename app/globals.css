@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0b0e13;
+  --panel: #131822;
+  --panel-2: #1b2230;
+  --border: #263041;
+  --text: #e6ebf2;
+  --muted: #8a97a8;
+  --accent: #f5a623;
+  --accent-2: #4da3ff;
+  --good: #37d67a;
+  --bad: #ff5964;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial,
+    sans-serif;
+}
+
+* {
+  scrollbar-color: var(--border) transparent;
+}
