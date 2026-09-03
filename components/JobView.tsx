@@ -5,7 +5,13 @@ import { JobProgress } from "@/components/JobProgress";
 import { PlayerHighlights } from "@/components/PlayerHighlights";
 import { DownloadBar } from "@/components/DownloadBar";
 import { VideoPreview } from "@/components/VideoPreview";
-import type { HighlightsReport, JobStage, JobStatus } from "@/types/job";
+import { ClipList } from "@/components/ClipList";
+import type {
+  ClipInfo,
+  HighlightsReport,
+  JobStage,
+  JobStatus,
+} from "@/types/job";
 
 export function JobView({
   jobId,
@@ -16,6 +22,7 @@ export function JobView({
 }) {
   const [status, setStatus] = useState<JobStatus | null>(null);
   const [report, setReport] = useState<HighlightsReport | null>(null);
+  const [clips, setClips] = useState<ClipInfo[]>([]);
 
   // SSE do progresso.
   useEffect(() => {
@@ -46,10 +53,13 @@ export function JobView({
     const load = async () => {
       const r = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
       if (!r.ok) return;
-      const { highlights } = (await r.json()) as {
+      const { highlights, clips } = (await r.json()) as {
         highlights: HighlightsReport | null;
+        clips: ClipInfo[] | null;
       };
-      if (alive && highlights) setReport(highlights);
+      if (!alive) return;
+      if (highlights) setReport(highlights);
+      if (clips) setClips(clips);
     };
     load();
     return () => {
@@ -77,6 +87,11 @@ export function JobView({
             <span>tickrate {report.tickrate}</span>
             <span>{report.players.length} jogadores</span>
           </div>
+
+          {clips.length > 0 &&
+            (status?.stage ?? initialStage) === "done" && (
+              <ClipList jobId={jobId} clips={clips} />
+            )}
 
           {(status?.montageOutputs?.length ?? 0) > 0 && (
             <VideoPreview

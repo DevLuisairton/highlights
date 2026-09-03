@@ -42,6 +42,24 @@ Testes: `npm test` (Vitest) e `python -m pytest` (da raiz).
 3. ✅ `python/montage.py` — ffmpeg: normaliza, lower-third, concat, trilha.
    `final_<slug>.mp4` por jogador + `final_partida.mp4`.
 
+## Modelo de highlight (referência: Highlights da Gamers Club)
+
+Cada highlight é uma **jogada independente** — 1 sequência de kills de 1
+jogador em 1 round. `scoring.group_sequences` opera sobre as kills de UM
+jogador só, então nunca mistura jogadores; um round pode ter N highlights.
+`build_report` devolve `report["highlights"]` (lista PLANA, ordenada por
+`roundNumber` + `tickStart`, com `globalId` 1..N) além de `players[]`.
+
+Vínculo obrigatório evento → jogador → POV: cada highlight carrega
+`steamId64` / `accountId` / `povAccountId` (=== `accountId`) / `team` /
+`roundNumber` / `kills[]` / `povValid`. `povValid = steamId64 de 17 díg.
+começando 7656119 e accountId > 0`. `vdmgen.build_vdm` e `recorder.record`
+**pulam** clipes com `povValid=false` ou `accountId<=0` — melhor não gerar
+do que gravar POV errado. O recorder trava a câmera com
+`spec_autodirector 0; spec_mode 4; spec_lock_to_accountid <acc>;
+spec_player_by_accountid <acc>` enquanto PAUSADO, e reforça a cada ~4s
+durante o clipe.
+
 ## Seleção de jogadores (obrigatória antes de gravar)
 
 Com `RECORDER_ENABLED=1` e `REVIEW_MODE=1` (padrão), o `run-job` pausa em

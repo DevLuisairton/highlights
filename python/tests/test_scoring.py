@@ -81,30 +81,63 @@ def test_agrupa_por_jogador_e_pontua_multikill(monkeypatch):
     assert hl["score"] == 8.5
     assert report["ranking"][0]["name"] == "A"
 
+    # ── modelo de highlight independente ──
+    # cada highlight carrega o vínculo evento->jogador->POV
+    assert hl["steamId64"] == "A"
+    assert hl["accountId"] == hl["povAccountId"] == 111
+    assert hl["team"] == "CT"
+    assert hl["roundNumber"] == 1
+    assert hl["povValid"] is False          # "A" não é steamId64 válido
+    assert [k["victim"] for k in hl["kills"]] == ["t1", "t2", "t3"]
 
-def test_sequencias_quebram_por_gap():
-    # 2 kills no round -> abaixo do ROUND_MERGE_MIN_KILLS, subdivide por gap
+    # lista PLANA (Partida -> Highlight 1..N), 1 por jogada, nunca agrupando
+    flat = report["highlights"]
+    assert len(flat) == 2                    # A (3K) + B (1 kill)
+    assert {h["player"] for h in flat} == {"A", "B"}
+    assert [h["globalId"] for h in flat] == [1, 2]
+    # mesmo objeto que em players[].highlights
+    assert flat[0] is a["highlights"][0] or flat[1] is a["highlights"][0]
+
+
+def test_povValid_so_com_steamid64_real():
+    kills = [_kill(1000, 1, "76561198000000001", "76561198000000009", headshot=True),
+             _kill(1040, 1, "76561198000000001", "76561198000000008")]
+    rounds = [{"round": 1, "endTick": 1300, "startTick": 0, "winner": "CT"}]
+    real = "76561198000000001"
+    players = {real: {"steamId64": real, "name": "neo", "team": "CT",
+                      "accountId": int(real) - 76561197960265728,
+                      "stats": {"kills": 2, "deaths": 0, "assists": 0, "headshotPct": 50}}}
+    hl = scoring.build_report("j", _parsed(kills, rounds, players))["highlights"][0]
+    assert hl["povValid"] is True
+    assert hl["accountId"] == hl["povAccountId"] == int(real) - 76561197960265728
+    assert hl["accountId"] > 0
+
+
+def test_rajada_junta_kills_proximas():
+    # rajada de verdade: 3 kills em ~2s -> 1 sequência (3K completo)
     kills = [
         _kill(1000, 1, "A", "t1"),
-        _kill(1100, 1, "A", "t2"),   # +1.56s -> mesma sequência
-        _kill(1000, 2, "A", "t3"),   # outro round
-        _kill(1600, 2, "A", "t4"),   # +9.4s -> nova sequência
+        _kill(1064, 1, "A", "t2"),   # +1.0s
+        _kill(1160, 1, "A", "t3"),   # +1.5s
     ]
-    seqs = scoring.group_sequences(kills, 64, 5.0)
-    assert [len(s) for s in seqs] == [2, 1, 1]
+    seqs = scoring.group_sequences(kills, 64, 10.0)
+    assert [len(s) for s in seqs] == [3]
 
 
-def test_round_de_3k_vira_uma_sequencia_mesmo_espalhado():
-    # 4 kills no mesmo round, longe uma da outra -> 1 sequência só
+def test_kills_espalhadas_no_round_NAO_viram_um_highlight_gigante():
+    # 4 kills espalhadas por ~37s no mesmo round -> NÃO é uma "jogada".
+    # Vira várias sequências curtas (o bug do clipe de 108s).
     kills = [
         _kill(1000, 7, "A", "t1"),
-        _kill(1800, 7, "A", "t2"),
-        _kill(2600, 7, "A", "t3"),
-        _kill(3400, 7, "A", "t4"),
+        _kill(1800, 7, "A", "t2"),   # +12.5s
+        _kill(2600, 7, "A", "t3"),   # +12.5s
+        _kill(3400, 7, "A", "t4"),   # +12.5s
     ]
-    seqs = scoring.group_sequences(kills, 64, 8.0)
-    assert len(seqs) == 1
-    assert len(seqs[0]) == 4
+    seqs = scoring.group_sequences(kills, 64, 10.0)
+    assert len(seqs) == 4
+    # a janela de qualquer sequência é curta
+    for s in seqs:
+        assert (s[-1]["tick"] - s[0]["tick"]) / 64 <= 10.0
 
 
 def test_clutch_detectado():

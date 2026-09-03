@@ -59,13 +59,13 @@ ASSETS_DIR = PYTHON_DIR / "assets"
 # (ver scoring.build_report).
 SCORE_MIN = _float("SCORE_MIN", 3.0)
 PER_PLAYER_TOP_N = _int("PER_PLAYER_TOP_N", 5)
-CLIP_PREROLL_SECONDS = _float("CLIP_PREROLL_SECONDS", 5.0)
-CLIP_POSTROLL_SECONDS = _float("CLIP_POSTROLL_SECONDS", 2.5)
-# Duração máxima de um clipe. Se um "round de 4K" tiver as kills espalhadas,
-# corta o começo (mantém a última kill + o desfecho) em vez de gravar o
-# round inteiro.
-MAX_CLIP_SECONDS = _float("MAX_CLIP_SECONDS", 22.0)
-SEQUENCE_GAP_SECONDS = _float("SEQUENCE_GAP_SECONDS", 8.0)
+CLIP_PREROLL_SECONDS = _float("CLIP_PREROLL_SECONDS", 4.0)
+CLIP_POSTROLL_SECONDS = _float("CLIP_POSTROLL_SECONDS", 3.0)
+# Teto de duração do clipe. Só corta o PRÉ-roll se estourar — nunca a parte
+# com as kills. Com o agrupamento por rajada raramente é atingido.
+MAX_CLIP_SECONDS = _float("MAX_CLIP_SECONDS", 40.0)
+# Gap máx. entre kills pra contarem como a MESMA rajada (2K/3K/4K/ACE).
+SEQUENCE_GAP_SECONDS = _float("SEQUENCE_GAP_SECONDS", 10.0)
 # Pausa o job após a pontuação pra você escolher jogadores/lances no painel
 # antes de gravar. Ligado por padrão quando RECORDER_ENABLED=1 (senão os
 # vídeos ficam enormes). REVIEW_MODE=0 força gravar todo mundo.
@@ -106,7 +106,9 @@ RECORD_AUDIO_DEVICE = os.environ.get("RECORD_AUDIO_DEVICE", "").strip()
 RECORD_CUT_PAD = _float("RECORD_CUT_PAD", 2.0)
 
 # ─── montagem (Fase 3) ────────────────────────────────────────────────────
-MONTAGE_COMBINED = _bool("MONTAGE_COMBINED", True)
+# Junta TODOS os lances num único final_partida.mp4. Desligado por padrão —
+# o produto principal é 1 vídeo independente por lance (clips/<jogador>/).
+MONTAGE_COMBINED = _bool("MONTAGE_COMBINED", False)
 MONTAGE_RESOLUTION = os.environ.get("MONTAGE_RESOLUTION", "1920x1080").strip()
 MONTAGE_FPS = _int("MONTAGE_FPS", 60)
 MONTAGE_MUSIC = _path("MONTAGE_MUSIC", ASSETS_DIR / "music.mp3")

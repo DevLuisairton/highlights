@@ -14,6 +14,19 @@ def _slug(name: str) -> str:
     return s or "player"
 
 
+def _valid_steamid(sid: str) -> bool:
+    """steamId64 de conta individual do CS2."""
+    return bool(sid) and sid.isdigit() and len(sid) == 17 and sid.startswith("7656119")
+
+
+def _round_number(rounds: list[dict], tick: int) -> int:
+    """Número 1-based do round que contém `tick` (por faixa de tick)."""
+    for i, r in enumerate(rounds):
+        if r.get("startTick", 0) <= tick <= r.get("endTick", 0):
+            return i + 1
+    return sum(1 for r in rounds if r.get("endTick", 0) < tick) + 1
+
+
 # Selos que a GamersClub/torneios grudam no nick e que a maioria das fontes
 # não renderiza: números/letras circulados, símbolos/dingbats, © ® ™, emoji.
 _BADGE_CLASS = (
@@ -54,22 +67,19 @@ def _round_bounds(rounds: list[dict], tick: int) -> tuple[int, int]:
     return r.get("startTick", 0), r.get("endTick", 0) or 0
 
 
-#: a partir de quantas kills no mesmo round o round inteiro do jogador vira
-#: UMA sequência (o "round de 3K/4K/ACE"), mesmo com as kills espalhadas.
-ROUND_MERGE_MIN_KILLS = 3
-
-
 def group_sequences(
     kills: list[dict],
     tickrate: int,
     gap_seconds: float,
 ) -> list[list[dict]]:
-    """Kills de UM jogador -> lista de sequências.
+    """Kills de UM jogador -> sequências = RAJADAS de kills próximas no tempo
+    (estilo Highlights da Gamers Club).
 
-    - Se o jogador fez >= ROUND_MERGE_MIN_KILLS kills num round, o round
-      inteiro dele é uma sequência só (senão um 4K com as mortes a 10s de
-      distância viraria 4 highlights de 1 kill e nenhum pontuaria).
-    - Nos demais rounds, subdivide por gap de tempo (spray transfer etc.).
+    Uma sequência é uma corrida de kills onde cada uma está a no máximo
+    `gap_seconds` da anterior, no mesmo round. NÃO junta o round inteiro:
+    um "4K" com as mortes espalhadas por 100s vira várias sequências curtas
+    (a maioria de 1 kill, filtradas depois), e o que sobra é a rajada de
+    verdade — que aí sim dá pra gravar completa.
     """
     if not kills:
         return []
@@ -81,9 +91,6 @@ def group_sequences(
     seqs: list[list[dict]] = []
     for rnd in sorted(by_round):
         rk = sorted(by_round[rnd], key=lambda x: x["tick"])
-        if len(rk) >= ROUND_MERGE_MIN_KILLS:
-            seqs.append(rk)
-            continue
         cur = [rk[0]]
         for k in rk[1:]:
             if (k["tick"] - cur[-1]["tick"]) <= gap_ticks:
@@ -254,6 +261,10 @@ def build_report(job_id: str, parsed: dict) -> dict:
             continue
         seqs = group_sequences(pk, tickrate, config.SEQUENCE_GAP_SECONDS)
 
+        acc = pl.get("accountId", 0)
+        team = pl.get("team", "UNKNOWN")
+        pov_valid = _valid_steamid(sid) and acc > 0
+
         candidates: list[dict] = []
         for seq in seqs:
             rnd = seq[0]["round"]
@@ -264,32 +275,57 @@ def build_report(job_id: str, parsed: dict) -> dict:
             last_t = seq[-1]["tick"]
             start_tick, end_tick = _round_bounds(rounds, last_t)
 
+            # janela = preroll antes da 1ª kill .. postroll depois da última.
             clip_end = last_t + round(config.CLIP_POSTROLL_SECONDS * tickrate)
             if end_tick:
-                clip_end = min(clip_end, end_tick + round(1.5 * tickrate))
+                clip_end = min(clip_end, end_tick + round(2.0 * tickrate))
             clip_end = min(clip_end, demo_end)
 
             clip_start = max(
                 start_tick,
                 first_t - round(config.CLIP_PREROLL_SECONDS * tickrate),
             )
-            # teto de duração: se as kills estão espalhadas (round de 4K),
-            # corta o começo e fica com o desfecho.
+            # teto só pra casos patológicos — corta o PRÉ-roll, jamais a
+            # parte com as kills (first_t..last_t continua inteira).
             max_ticks = round(config.MAX_CLIP_SECONDS * tickrate)
             if clip_end - clip_start > max_ticks:
-                clip_start = max(start_tick, clip_end - max_ticks)
+                clip_start = max(
+                    start_tick,
+                    min(first_t - round(1.0 * tickrate), clip_end - max_ticks),
+                )
 
             candidates.append(
                 {
                     "id": 0,
                     "score": score,
+                    # round (0-based do total_rounds_played, back-compat) +
+                    # roundNumber (1-based, casado por tick — é o "Round N").
                     "round": rnd,
+                    "roundNumber": _round_number(rounds, first_t),
                     "tickStart": clip_start,
                     "tickEnd": clip_end,
                     "timeStart": round(clip_start / tickrate, 2),
                     "timeEnd": round(clip_end / tickrate, 2),
                     "tags": tags,
                     "killCount": kc,
+                    # ── vínculo obrigatório evento -> jogador -> POV ──
+                    "steamId64": sid,
+                    "accountId": acc,
+                    "povAccountId": acc,   # POV == jogador do evento
+                    "playerName": _display_name(pl["name"]),
+                    "team": team,
+                    "povValid": pov_valid,
+                    "kills": [
+                        {
+                            "tick": k["tick"],
+                            "victim": k["victim"],
+                            "weapon": k["weapon"],
+                            "headshot": k["headshot"],
+                            "noscope": k["noscope"],
+                            "penetrated": k["penetrated"],
+                        }
+                        for k in seq
+                    ],
                 }
             )
 
@@ -333,11 +369,25 @@ def build_report(job_id: str, parsed: dict) -> dict:
         for p in players_out
     ]
 
+    # ── lista PLANA de highlights independentes (Partida -> Highlight 1..N) ──
+    # Mesmos objetos que estão em players[].highlights (referência), então
+    # globalId/player valem nos dois lugares.
+    flat: list[dict] = []
+    for p in players_out:
+        for h in p["highlights"]:
+            h["player"] = p["slug"]          # slug -> pasta/arquivo do clipe
+            h["playerDisplayName"] = p["displayName"]
+            flat.append(h)
+    flat.sort(key=lambda h: (h["roundNumber"], h["tickStart"]))
+    for i, h in enumerate(flat, 1):
+        h["globalId"] = i
+
     return {
         "jobId": job_id,
         "map": parsed["map"],
         "matchScore": parsed["matchScore"],
         "tickrate": tickrate,
         "players": players_out,
+        "highlights": flat,
         "ranking": ranking,
     }

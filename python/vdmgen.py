@@ -41,17 +41,27 @@ def _flatten(report: dict, keep: dict[str, list[int]] | None) -> list[dict]:
         for h in p["highlights"]:
             if allowed is not None and h["id"] not in allowed:
                 continue
+            acc = h.get("accountId", p.get("accountId", 0))
+            # REGRA CRÍTICA: só grava se o POV pertence ao jogador do evento.
+            # Sem fallback — melhor não gerar do que gerar POV errado.
+            if not h.get("povValid", True) or acc <= 0:
+                continue
             items.append(
                 {
-                    "steamId64": p["steamId64"],
-                    "accountId": p["accountId"],
-                    "playerName": p.get("displayName") or p["name"],
+                    "steamId64": h.get("steamId64", p["steamId64"]),
+                    "accountId": acc,
+                    "povAccountId": acc,
+                    "playerName": h.get("playerName")
+                    or p.get("displayName")
+                    or p["name"],
                     "playerSlug": p.get("slug") or _slug(p["name"]),
-                    "team": p.get("team", "UNKNOWN"),
+                    "team": h.get("team", p.get("team", "UNKNOWN")),
                     "highlightId": h["id"],
+                    "globalId": h.get("globalId", h["id"]),
                     "score": h["score"],
                     "tags": h.get("tags", []),
                     "round": h["round"],
+                    "roundNumber": h.get("roundNumber", h["round"]),
                     "tickStart": h["tickStart"],
                     "tickEnd": h["tickEnd"],
                 }
@@ -161,12 +171,15 @@ def build_vdm(
                 "playerName": h["playerName"],
                 "steamId64": h["steamId64"],
                 "accountId": h["accountId"],
+                "povAccountId": h["accountId"],
                 "team": h["team"],
                 "index": n,
                 "highlightId": h["highlightId"],
+                "globalId": h.get("globalId", h["highlightId"]),
                 "score": h["score"],
                 "tags": h["tags"],
                 "round": h["round"],
+                "roundNumber": h.get("roundNumber", h["round"]),
                 "tickStart": h["tickStart"],
                 "tickEnd": h["tickEnd"],
             }

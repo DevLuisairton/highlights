@@ -44,9 +44,15 @@ export interface HighlightTag {
 }
 
 export interface Highlight {
+  /** id sequencial DENTRO do jogador (1..N). */
   id: number;
+  /** id sequencial NA PARTIDA inteira (1..N), por round+tick. */
+  globalId?: number;
   score: number;
+  /** total_rounds_played na 1ª kill (0-based, back-compat). */
   round: number;
+  /** número do round 1-based, casado por tick — é o "Round N". */
+  roundNumber: number;
   tickStart: number;
   tickEnd: number;
   /** Segundos desde o início do demo (tickStart / tickrate). */
@@ -55,6 +61,26 @@ export interface Highlight {
   /** Ex.: ["ACE", "3HS", "1v3", "wallbang"] */
   tags: string[];
   killCount: number;
+  /** ── vínculo obrigatório evento → jogador → POV ── */
+  steamId64: string;
+  accountId: number;
+  /** account id da fonte de vídeo — DEVE ser === accountId. */
+  povAccountId: number;
+  playerName: string;
+  team: "CT" | "TERRORIST" | "UNKNOWN";
+  /** false = steamId64/accountId inválido → não grava (evita POV errado). */
+  povValid: boolean;
+  /** slug do jogador (só na lista plana report.highlights). */
+  player?: string;
+  playerDisplayName?: string;
+  kills?: {
+    tick: number;
+    victim: string;
+    weapon: string;
+    headshot: boolean;
+    noscope: boolean;
+    penetrated: number;
+  }[];
 }
 
 export interface PlayerHighlights {
@@ -85,6 +111,9 @@ export interface HighlightsReport {
   matchScore: string;
   tickrate: number;
   players: PlayerHighlights[];
+  /** Lista PLANA de highlights independentes (Partida → Highlight 1..N),
+   * ordenada por round e tick. Mesmos objetos de players[].highlights. */
+  highlights: Highlight[];
   /** Ranking geral por totalScore, referências por steamId64. */
   ranking: { steamId64: string; name: string; totalScore: number }[];
 }
@@ -93,4 +122,29 @@ export interface HighlightsReport {
 export interface SelectionPayload {
   /** Mapa steamId64 -> lista de highlight ids a manter. */
   keep: Record<string, number[]>;
+}
+
+/** Uma entrada de clips.json — um clipe gravado (ou a gravar). */
+export interface ClipInfo {
+  file: string;
+  stem: string;
+  /** slug do jogador (pasta em clips/). */
+  player: string;
+  playerName: string;
+  steamId64: string;
+  accountId: number;
+  /** === accountId. POV do vídeo. */
+  povAccountId: number;
+  team: "CT" | "TERRORIST" | "UNKNOWN";
+  /** 1..N por jogador, na ordem de tick (é o `n` do endpoint de download). */
+  index: number;
+  highlightId: number;
+  /** 1..N na partida inteira, ordenado por round+tick. */
+  globalId: number;
+  score: number;
+  tags: string[];
+  round: number;
+  roundNumber: number;
+  tickStart: number;
+  tickEnd: number;
 }

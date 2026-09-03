@@ -20,6 +20,7 @@ recortada no fim.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -57,6 +58,8 @@ class NetCon:
         self.port = port
         self.sock: socket.socket | None = None
         self._buf = ""
+        self._console = ""
+        self._console_seen = 0
 
     def _open_once(self) -> bool:
         try:
@@ -121,9 +124,21 @@ class NetCon:
             self.sock = None
         text = "".join(out)
         self._buf += text
+        self._console += text
         if len(self._buf) > 400_000:  # não deixa o buffer crescer sem limite
             self._buf = self._buf[-200_000:]
         return text
+
+    def echo_console(self, prefix: str = "cs2") -> None:
+        """Joga o que o CS2 mandou desde a última chamada no stderr
+        (worker.log) — sem isso é impossível depurar POV / gototick."""
+        self.drain()
+        new = self._console[self._console_seen:]
+        self._console_seen = len(self._console)
+        for line in new.splitlines():
+            s = line.strip()
+            if s:
+                print(f"  [{prefix}] {s}", file=sys.stderr, flush=True)
 
     def wait_for(self, needle: str, timeout_s: float, reconnect: bool = True) -> bool:
         deadline = time.time() + timeout_s
@@ -147,56 +162,107 @@ class NetCon:
 
 
 # ─── captura de tela ─────────────────────────────────────────────────────
+_LOOPBACK_RE = re.compile(
+    r"stereo mix|mixagem est|cable output|virtual-audio-capturer|what u hear|"
+    r"wave out mix|loopback|voicemeeter out",
+    re.I,
+)
+
+
+def _resolve_audio_device() -> str | None:
+    """RECORD_AUDIO_DEVICE: vazio -> sem áudio; 'auto' -> procura um device
+    de loopback nos dshow; qualquer outra coisa -> usa como nome literal."""
+    dev = config.RECORD_AUDIO_DEVICE.strip()
+    if not dev:
+        return None
+    if dev.lower() != "auto":
+        return dev
+    try:
+        r = subprocess.run(
+            [config.FFMPEG_BIN, "-hide_banner", "-list_devices", "true",
+             "-f", "dshow", "-i", "dummy"],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception as e:  # noqa: BLE001
+        _log(f"áudio: não listei dispositivos ({e})")
+        return None
+    for line in r.stderr.splitlines():
+        m = re.search(r'"([^"]+)"\s*\(audio\)', line)
+        if m and _LOOPBACK_RE.search(m.group(1)):
+            _log(f"áudio: usando loopback '{m.group(1)}'")
+            return m.group(1)
+    _log("áudio: nenhum dispositivo de loopback. Clipes sem som do jogo — "
+         "habilite 'Mixagem estéreo' no Windows (Som > Gravação > Mostrar "
+         "dispositivos desativados) ou instale o VB-Audio Cable, e ponha o "
+         "nome em RECORD_AUDIO_DEVICE.")
+    return None
+
+
 def _start_capture(dest: Path) -> subprocess.Popen:
     fps = config.RECORD_FPS
     mode = config.RECORD_CAPTURE
     w, h = config.RECORD_RESOLUTION.split("x")
     ff = config.FFMPEG_BIN
+    audio = _resolve_audio_device()
 
+    # sem -nostdin: paramos mandando "q" pelo stdin pra o mp4 finalizar
+    # direito (terminate() no Windows é kill duro e corrompe o arquivo).
+    args = [ff, "-y"]
+    # 1) entrada de áudio (índice 0, se houver)
+    if audio:
+        args += ["-f", "dshow", "-i", f"audio={audio}"]
+
+    # 2) entrada de vídeo — draw_mouse=0 / -draw_mouse 0 tira o cursor do SO
     if mode == "ddagrab":
-        args = [
-            ff, "-y", "-nostdin",
+        args += [
             "-init_hw_device", "d3d11va",
             "-filter_complex",
-            f"ddagrab=output_idx=0:framerate={fps},hwdownload,format=bgra",
-            "-c:v", "libx264", "-preset", "ultrafast", "-qp", "18",
-            "-pix_fmt", "yuv420p", str(dest),
+            f"ddagrab=output_idx=0:framerate={fps}:draw_mouse=0,"
+            f"hwdownload,format=bgra[v]",
         ]
+        vmap = "[v]"
     elif mode == "gdigrab-window":
-        args = [
-            ff, "-y", "-nostdin",
-            "-f", "gdigrab", "-framerate", str(fps),
+        args += [
+            "-f", "gdigrab", "-framerate", str(fps), "-draw_mouse", "0",
             "-i", "title=Counter-Strike 2",
-            "-c:v", "libx264", "-preset", "ultrafast", "-qp", "18",
-            "-pix_fmt", "yuv420p", str(dest),
         ]
+        vmap = f"{1 if audio else 0}:v"
     else:  # gdigrab (tela toda)
-        args = [
-            ff, "-y", "-nostdin",
-            "-f", "gdigrab", "-framerate", str(fps),
+        args += [
+            "-f", "gdigrab", "-framerate", str(fps), "-draw_mouse", "0",
             "-video_size", f"{w}x{h}", "-i", "desktop",
-            "-c:v", "libx264", "-preset", "ultrafast", "-qp", "18",
-            "-pix_fmt", "yuv420p", str(dest),
         ]
+        vmap = f"{1 if audio else 0}:v"
 
-    dev = config.RECORD_AUDIO_DEVICE
-    if dev:
-        args[args.index(str(dest)):args.index(str(dest))] = [
-            "-f", "dshow", "-i", f"audio={dev}", "-c:a", "aac", "-ar", "48000",
-        ]
+    args += ["-map", vmap]
+    if audio:
+        args += ["-map", "0:a", "-c:a", "aac", "-ar", "48000"]
+    args += [
+        "-c:v", "libx264", "-preset", "ultrafast", "-qp", "18",
+        "-pix_fmt", "yuv420p", str(dest),
+    ]
 
     _log("captura: " + " ".join(args))
     return subprocess.Popen(
-        args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        args, stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
 
 
 def _stop_capture(proc: subprocess.Popen) -> None:
-    proc.terminate()
+    """Para o ffmpeg com 'q' pra ele finalizar/moov o mp4."""
     try:
-        proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        if proc.stdin:
+            proc.stdin.write(b"q")
+            proc.stdin.flush()
+            proc.stdin.close()
+        proc.wait(timeout=20)
+    except Exception:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def _cut(src: Path, start: float, end: float, dest: Path) -> bool:
@@ -247,14 +313,11 @@ def record(job_id: str, job_path: Path, report: dict, clips: list[dict]) -> None
     staged_dem = demos_dir / f"{stem}.dem"
     shutil.copy(job_path / "uploads" / "partida.dem", staged_dem)
 
-    recording = job_path / "recording.mkv"
     port = config.NETCON_PORT
     con = NetCon(port)
     proc = None
     ff = None
-    pre = config.CLIP_PREROLL_SECONDS
-    post = config.CLIP_POSTROLL_SECONDS
-    settle = 1.5  # tempo pra câmera assentar após o gototick
+    settle = 2.5  # tempo (pausado) pra mundo/câmera assentarem após o gototick
 
     try:
         w, h = config.RECORD_RESOLUTION.split("x")
@@ -288,58 +351,103 @@ def record(job_id: str, job_path: Path, report: dict, clips: list[dict]) -> None
         # range 0". Deixa correr.
         time.sleep(config.RECORD_DEMO_WARMUP)
 
-        # HUD limpo (sem sv_cheats / demo_timescale — mexem no estado do demo)
-        con.send("cl_draw_only_deathnotices 1")
-        con.send("spec_show_xray 0")
-        con.send("cl_showfps 0")
+        # HUD de frag movie + trava de espectador. NUNCA pausamos o demo:
+        # deixamos rodar em 1x e só damos demo_gototick pra cada lance
+        # (pausar + resume estava falhando e congelando o clipe).
+        for cmd in (
+            "sv_cheats 1",
+            "demo_timescale 1",
+            "spec_autodirector 0",          # CS2 não troca de jogador sozinho
+            "cl_draw_only_deathnotices 1",
+            "cl_deathnotices_time 0.001",
+            "spec_hud 0",
+            "spec_show_xray 0",
+            "cl_showfps 0",
+            "cl_showpos 0",
+            "sv_showimpacts 0",
+            "cl_hud_telemetry_frametime_show 0",
+            "cl_hud_telemetry_net_show 0",
+        ):
+            con.send(cmd)
+        time.sleep(0.5)
+        con.echo_console("setup")
 
-        jobstate.update(job_id, stage="recording",
-                        message="Gravando os lances…", progress=73)
-        ff = _start_capture(recording)
-        time.sleep(1.5)
-        t0 = time.time()
-
-        segments: list[tuple[dict, float, float]] = []
-        n = len(clips)
-        for i, c in enumerate(clips):
-            con.send(f"demo_gototick {c['tickStart']}")
-            # o gototick "pula" processando pacotes — espera terminar
-            con.wait_for("Skipping finished", 30)
+        def lock(acc: int) -> None:
+            con.send("spec_autodirector 0")
             con.send("spec_mode 4")
-            con.send(f"spec_lock_to_accountid {c['accountId']}")
-            time.sleep(settle)
-            seg_start = time.time() - t0
+            con.send(f"spec_lock_to_accountid {acc}")
+            con.send(f"spec_player_by_accountid {acc}")
 
-            # o demo segue tocando sozinho pela duração do lance
-            dur = max(2.0, (c["tickEnd"] - c["tickStart"]) / tickrate)
-            time.sleep(dur)
-            seg_end = time.time() - t0
-            segments.append((c, seg_start, seg_end))
+        # trava no 1º jogador já aqui (o alvo é sempre o mesmo por job hoje)
+        first_acc = int(clips[0].get("povAccountId") or clips[0].get("accountId") or 0)
+        if first_acc > 0:
+            lock(first_acc)
+        con.echo_console("lock0")
+
+        n = len(clips)
+        done = 0
+        for i, c in enumerate(clips):
+            acc = int(c.get("povAccountId") or c.get("accountId") or 0)
+            sid = str(c.get("steamId64") or "")
+            if acc <= 0 or not (sid.isdigit() and len(sid) == 17):
+                _log(f"PULANDO {c['stem']}: POV inválido "
+                     f"(accountId={acc}, steamId64={sid!r})")
+                continue
+
+            r = c.get("roundNumber", c.get("round"))
             jobstate.update(
                 job_id, stage="recording",
-                message=f"Gravando… lance {i + 1}/{n} ({c['playerName']})",
-                progress=73 + 12 * (i + 1) / n,
+                message=f"Gravando lance {i + 1}/{n} — {c['playerName']} (R{r})",
+                progress=73 + 16 * i / n,
             )
+            _log(f"clipe {c['stem']}: {c['playerName']} team={c.get('team')} "
+                 f"R{r} acc={acc} ticks {c['tickStart']}..{c['tickEnd']} "
+                 f"({round((c['tickEnd']-c['tickStart'])/tickrate,1)}s)")
 
-        con.send("disconnect", "quit")
-        time.sleep(2.0)
-        _stop_capture(ff)
-        ff = None
+            # 1) pula pro início do lance com o demo TOCANDO (não pausado)
+            con.send(f"demo_gototick {c['tickStart']}")
+            got_skip = con.wait_for("Demo Skipping", 8)
+            if got_skip:
+                con.wait_for("Skipping finished", 25) or con.wait_for("finished", 5)
+            else:
+                time.sleep(3.0)   # jump pequeno / sem log
+            lock(acc)
+            time.sleep(settle)    # mundo assenta, câmera trava
+            con.echo_console(f"hl{i+1}-seek")
 
-        # recorta
-        jobstate.update(job_id, stage="recording",
-                        message="Recortando os clipes…", progress=86)
-        done = 0
-        for c, s, e in segments:
+            # 2) grava exatamente a janela do lance (demo já está em 1x)
             dest = job_path / "clips" / c["player"] / f"clip_{c['index']:02d}.mp4"
-            if _cut(recording, s - pre, e + post, dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            ff = _start_capture(dest)
+            time.sleep(1.2)
+            lock(acc)
+
+            dur = max(3.0, (c["tickEnd"] - c["tickStart"]) / tickrate)
+            slept = 0.0
+            while slept < dur:
+                step = min(3.0, dur - slept)
+                time.sleep(step)
+                slept += step
+                con.send(f"spec_lock_to_accountid {acc}")
+
+            _stop_capture(ff)
+            ff = None
+            con.echo_console(f"hl{i+1}-done")
+            if dest.exists() and dest.stat().st_size > 20_000:
                 done += 1
+            else:
+                _log(f"clipe {c['stem']} saiu vazio/curto")
+
+        con.send("disconnect")
+        con.send("quit")
+        time.sleep(1.5)
+
         if done == 0:
             raise RuntimeError(
                 "Nenhum clipe gerado — verifique se o CS2 abriu e o "
                 f"-netconport {port} respondeu (worker.log)."
             )
-        _log(f"{done}/{len(segments)} clipes recortados")
+        _log(f"{done}/{n} clipes gravados")
 
     finally:
         con.close()

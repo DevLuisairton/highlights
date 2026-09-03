@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import {
   deleteJob,
   isValidJobId,
+  readClips,
   readHighlights,
   readJobStatus,
 } from "@/lib/jobs";
@@ -27,9 +28,12 @@ export async function GET(
     return Response.json({ error: "Job não encontrado." }, { status: 404 });
   }
 
-  const highlights = await readHighlights(jobId);
+  const [highlights, clips] = await Promise.all([
+    readHighlights(jobId),
+    readClips(jobId),
+  ]);
   return Response.json(
-    { status, highlights },
+    { status, highlights, clips },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

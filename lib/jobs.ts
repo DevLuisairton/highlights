@@ -29,6 +29,17 @@ export async function readHighlights(
   }
 }
 
+/** Lê o clips.json (mapa clipe -> jogador/round/tags/score). */
+export async function readClips(jobId: string): Promise<unknown[] | null> {
+  try {
+    const raw = await readFile(path.join(jobDir(jobId), "clips.json"), "utf-8");
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
 const TTL_MS = (Number(process.env.JOB_TTL_HOURS) || 72) * 3_600_000;
 
 /** Lista todos os jobs, mais recentes primeiro. Aproveita pra apagar os que
